@@ -39,6 +39,22 @@ AC_SUBST([C23_CFLAGS], [$orch_cv_c23])
 
 AC_CONFIG_HEADERS([config.h])
 
+# --- GNU/Hurd ou non ---------------------------------------------------
+# Le cœur (contrat, scheduler, agrégateur, storage) est du C23/POSIX
+# pur et se compile partout ; seules la boucle serveur trivfs et
+# l'édition de liens des bibliothèques Hurd sont propres à
+# GNU/Hurd.  Le système hôte décide quelle face est liée :
+#   - gnu*/mach*  : main-hurd.c + trivfs-hooks.c (translator
+#                   /orchestrate) ;
+#   - sinon       : main.c (binaire de vérification sur stdio —
+#                   utile pour `make check` et la compilation
+#                   continue sur les autres POSIX, mêmes tests).
+case "$host_os" in
+  gnu*|mach*) hurd_system=yes ;;
+  *)          hurd_system=no ;;
+esac
+AM_CONDITIONAL([ON_HURD], [test "x$hurd_system" = xyes])
+
 # Phase 0 : le squelette n'a aucune dépendance externe.  La phase 1
 # coordonne des instances de neuron-translator par settrans et
 # écrit dans /db ; les bibliothèques Hurd (trivfs/netfs) n'arrivent
