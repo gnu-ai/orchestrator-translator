@@ -20,6 +20,10 @@ alimente avec des données récupérées sur le Web via
 et archive données d'entraînement, résultats et historique dans
 PostgreSQL via
 [data-base-translator](https://github.com/gnu-ai/data-base-translator).
+L'utilisateur dialogue avec la pile par l'interface
+`inference-translator`, en local (fichiers POSIX) ou à travers une
+session SSH quand GNU AI tourne dans un datacenter ou un cluster
+local — l'orchestrateur, lui, ne voit jamais la différence.
 
 Licence : GPLv3 ou version ultérieure. Langage : C23, POSIX.1-2008,
 interfaces Hurd (`trivfs`/`netfs`).
@@ -35,7 +39,7 @@ translator dédié, l'orchestrateur ne fait que **coordonner**.
 |---|---|---|
 | `orchestrator-translator` | coordination : scheduler, supervisor, evaluator, aggregator | ce dépôt |
 | `neuron-translator` | unité de calcul : réseau sigmoïde feedforward, piloté par POSIX | gnu-ai/neuron-translator |
-| `inference-translator` | interface de dialogue : reçoit les prompts, extrait les requêtes et URL | gnu-ai/inference-translator |
+| `inference-translator` | interface de dialogue : prompts, trio JSON `request`/`status`/`result`, mode distant SSH | gnu-ai/inference-translator |
 | `httpfs-translator` | transport pur HTTP → système de fichiers (`content`, `headers`, `status`) | gnu-ai/httpfs-translator |
 | `data-base-translator` | persistance PostgreSQL : données d'entraînement, résultats, historique | gnu-ai/data-base-translator |
 
@@ -73,7 +77,8 @@ translator dédié, l'orchestrateur ne fait que **coordonner**.
    les horodatées, et les comparer (évaluateur).
 4. **Agrégation** : produire un résultat final pondéré ou voté.
 5. **Acquisition de données par le réseau** : une URL fournie *dans le
-   prompt* est extraite par `inference-translator`, le contenu est lu
+   prompt* est extraite par `inference-translator` (requête `request`
+   lue dans `/inference/request`), le contenu est lu
    via `httpfs-translator` (`/web/<chemin>/content`), sans que
    l'orchestrateur n'interprète lui-même du HTML ni ne gère de socket.
 6. **Persistance PostgreSQL** : les données d'entraînement récupérées
@@ -82,8 +87,10 @@ translator dédié, l'orchestrateur ne fait que **coordonner**.
    `data-base-translator`.
 7. **Interface translator** : l'orchestrateur est lui-même un
    translator monté (par ex. `/orchestrate`), pilotable par des
-   commandes POSIX et interrogeable (`cat`) pour l'état et les
-   résultats.
+   commandes POSIX et interrogeable (`cat`) : `/orchestrate/status`
+   (suivi de l'exécution) et `/orchestrate/result` (résultat final) —
+   les types 2 et 3 du trio JSON consommés par l'interface
+   `inference`.
 
 ---
 
@@ -98,7 +105,7 @@ translator dédié, l'orchestrateur ne fait que **coordonner**.
                 ┌───────────────────────┐
                 │  inference-translator │  extraction prompt/URL
                 └──────────┬────────────┘
-                           │  URL
+                           │  /inference/request
                            ▼
                 ┌───────────────────────┐
                 │   httpfs-translator   │  transport HTTP → fichiers
@@ -112,18 +119,19 @@ translator dédié, l'orchestrateur ne fait que **coordonner**.
         └───┬───────────────┬──────────────┬───┘
             │ settrans      │ write/read   │ write/read
             ▼               ▼              ▼
-      /llm1 … /llmN   data-base-      (état, résultats,
-      neuron-         translator      relecture POSIX)
-      translator      PostgreSQL
+      /llm1 … /llmN   data-base-      /orchestrate/status
+      neuron-         translator      /orchestrate/result
+      translator      PostgreSQL      (interface inference)
 ```
 
 ### 3.2 Flux nominal d'une requête
 
 1. Un prompt contenant une ou plusieurs URL est soumis à
    `inference-translator` (par ex. `echo "résume https://…" |
-   tee /inference`).
-2. `inference-translator` expose l'URL et la tâche sous une forme
-   structurée ; l'orchestrateur la lit.
+   tee /inference/prompt`).
+2. `inference-translator` expose la requête structurée (type 1,
+   `request` : prompt, tâche, URL, paramètres) dans
+   `/inference/request` ; l'orchestrateur la lit.
 3. L'orchestrateur monte (ou réutilise) une instance `httpfs` avec
    l'URL de base et lit `/web/.../content` et `/web/.../status`.
    Un statut autre que `200` n'est pas une erreur POSIX : c'est à
@@ -137,7 +145,9 @@ translator dédié, l'orchestrateur ne fait que **coordonner**.
 6. L'evaluator compare les sorties, l'aggregator produit le résultat
    final.
 7. Exécution, sorties et décision sont archivés dans PostgreSQL ;
-   le résultat final est lisible côté utilisateur.
+   le résultat final est lisible dans `/orchestrate/result` (type 3),
+   et l'interface `inference` suit l'exécution en streaming via
+   `/orchestrate/status` (type 2).
 
 ### 3.3 Contrats d'interface (principe clé)
 
@@ -150,9 +160,17 @@ existant :
 |---|---|
 | `orchestrator → neuron` | `write` de la topologie, puis `write` du vecteur d'entrée ; `read` de la sortie. Conforme à l'interface actuelle de `neuron-translator`. |
 | `orchestrator → httpfs` | `settrans` d'un nœud avec l'URL de base ; `read` de `…/content`, `…/headers`, `…/status`. |
-| `orchestrator → inference` | `write` du prompt ; `read` de la requête structurée (URL, tâche, paramètres). |
+| `orchestrator → inference` | `read` de la requête structurée `/inference/request` (type 1 : URL, tâche, paramètres) ; c'est l'utilisateur qui soumet le prompt, jamais l'orchestrateur. |
+| `inference → orchestrator` | `read` de `/orchestrate/status` (type 2) et `/orchestrate/result` (type 3) par l'interface `inference` ; elle n'écrit jamais dans l'orchestrateur. |
 | `orchestrator → database` | `write` des enregistrements (données d'entraînement, exécutions, résultats) ; `read` des requêtes (jeux d'entraînement, historique). Schéma SQL défini en phase 0. |
-| `utilisateur → orchestrator` | `write` de commandes (`run`, `status`, `set …`) ; `read` de l'état et du résultat. |
+| `utilisateur → orchestrator` | `write` de commandes (`run`, `status`, `set …`) ; `read` de l'état (`status`) et du résultat (`result`). |
+
+Le **trio JSON** `request`/`status`/`result` est gelé en phase 0 avec
+`inference-translator` : en local, ce sont des fichiers
+(`/inference/request`, `/orchestrate/status`, `/orchestrate/result`) ;
+en mode distant (datacenter/cluster), l'IHM les transporte par une
+session SSH. L'orchestrateur ne voit jamais la différence : il ne
+connaît que les fichiers.
 
 ---
 
@@ -192,6 +210,18 @@ avec son périmètre minimal (création du schéma + écriture de `runs` et
 `run_instances`) ; l'orchestrateur, lui, est écrit directement contre
 le contrat, sans stub temporaire à remplacer plus tard.
 
+### Que faut-il savoir du mode distant (datacenter/cluster) ?
+
+Rien. La pile peut tourner dans un datacenter ou un cluster local ;
+l'IHM de l'utilisateur s'y connecte par SSH avec une clé nominative
+(registre servi par `data-base-translator`). L'orchestrateur n'est
+pas concerné : il ne voit que des fichiers locaux (`/inference`,
+`/llm<N>`, `/db`, `/orchestrate`), n'écoute sur aucun port, ne gère
+ni clé ni chiffrement. Sa seule obligation est de respecter le trio
+JSON gelé — servir `status` et `result` en `read` propre et complet —
+pour que l'interface puisse suivre une exécution et lire le résultat
+en streaming, en local comme à distance.
+
 ### Politique d'agrégation initiale
 
 Le MVP implémente le vote majoritaire (sorties discrètes) et la
@@ -203,7 +233,9 @@ par l'evaluator (score des instances) arrivent en phase 5.
 ## 5. Phases
 
 Chaque phase a un livrable, des critères d'acceptation et une
-dépendance explicite sur la précédente.
+dépendance explicite sur la précédente. La phase 3 dépend en outre
+des phases 0–1 d'`inference-translator` (translator `/inference` et
+requête structurée).
 
 ### Phase 0 — Spécification et contrats (avant tout code)
 
@@ -218,10 +250,15 @@ dépendance explicite sur la précédente.
   aux tests.
 - Convention des points de montage : `/llm<N>`, `/web`, `/inference`,
   `/db`, `/orchestrate`.
+- Gel du trio JSON `request`/`status`/`result` avec
+  `inference-translator` et des nœuds `/orchestrate/status` et
+  `/orchestrate/result` que l'interface lit en streaming.
 - **Livrable** : `SPEC.md` + squelette de code compilable.
 - **Acceptation** : revue des contrats avec les dépôts voisins,
   notamment le périmètre minimal de `data-base-translator` (création du
-  schéma + écriture) requis pour la phase 1.
+  schéma + écriture) requis pour la phase 1, et revue croisée du trio
+  JSON et des nœuds `/orchestrate/{status,result}` avec
+  `inference-translator`.
 
 ### Phase 1 — MVP : orchestration de base avec persistance PostgreSQL
 
@@ -231,7 +268,8 @@ dépendance explicite sur la précédente.
   des sorties.
 - Aggregator : vote majoritaire et moyenne uniforme.
 - Translator `/orchestrate` minimal : `run` (lancer un descripteur de
-  tâche), `status`, `result`.
+  tâche), `status`, `result` — ces deux derniers nœuds servent le trio
+  JSON (types 2 et 3) consommé par l'interface `inference`.
 - **Persistance dès la première exécution** : chaque `run`
   (descripteur, date, stratégie) et chaque `run_instances`
   (topologie, entrée, sortie, statut, score) est écrit dans
@@ -259,7 +297,8 @@ dépendance explicite sur la précédente.
 
 ### Phase 3 — Acquisition réseau : inference + httpfs
 
-- Lecture du prompt via `inference-translator` ; extraction des URL.
+- Lecture de la requête structurée `/inference/request` (type 1) via
+  `inference-translator` ; extraction des URL.
 - Montage dynamique de `httpfs` sur l'URL, lecture de `content` et
   `status`, gestion des cas non-200 (politique : réessai, saut,
   abandon documenté).
@@ -354,6 +393,12 @@ CREATE TABLE incidents (
 );
 ```
 
+Les tables du registre de clés SSH du mode distant (`users`,
+`access_keys`, `auth_failures`) sont gelées dans le `PLAN.md` de
+`data-base-translator` (sa section 6), qui en est la source de
+vérité ; l'orchestrateur ne les lit ni ne les écrit — le mode
+distant est porté par `inference-translator`.
+
 ---
 
 ## 7. Contraintes et conventions techniques
@@ -368,6 +413,9 @@ CREATE TABLE incidents (
 - **Erreurs réseau ≠ erreurs POSIX** : un statut HTTP non-200 est une
   donnée exploitable (philosophie `httpfs`), seule la couche transport
   peut échouer.
+- **Mode distant sans impact** : ni SSH, ni clés, ni port d'écoute —
+  ces responsabilités appartiennent à `inference-translator` et au
+  registre de `data-base-translator`.
 - Chaque translator reste remplaçable : l'orchestrateur ne connaît que
   les points de montage et les contrats, jamais les binaires.
 
@@ -380,7 +428,7 @@ CREATE TABLE incidents (
 | 0 | Spécification, contrats, schéma SQL | — |
 | 1 | MVP : N neuron-translator, agrégation simple, persistance PostgreSQL | 0 |
 | 2 | Supervisor, parallelisme, résilience (incidents persistés) | 1 |
-| 3 | Prompt → URL → httpfs → entrées réseau (training_data persisté) | 1 |
+| 3 | Prompt → URL → httpfs → entrées réseau (training_data persisté) | 1, inference 0–1 |
 | 4 | Rejouabilité : rejeu, historique, requêtes en base | 1, 3 |
 | 5 | Évaluation pondérée, sélection de topologies | 2, 4 |
 | 6 | Durcissement, CI Hurd, v1.0 | 1–5 |
@@ -390,3 +438,8 @@ le MVP. La base de données est intégrée dès la phase 1 : elle n'est
 plus un chantier en soi mais une propriété permanente du système —
 chaque phase qui suit ne fait qu'écrire ou lire davantage dans les
 tables déjà créées.
+
+Le mode distant (datacenter/cluster) est porté par
+`inference-translator` (SSH, clés SSH nominatives) et le registre de
+`data-base-translator` : l'orchestrateur n'y participe pas, il ne fait
+que respecter le trio JSON `request`/`status`/`result`.
