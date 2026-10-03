@@ -228,6 +228,30 @@ Le MVP implémente le vote majoritaire (sorties discrètes) et la
 moyenne pondérée uniforme (sorties réelles). Les pondérations appris
 par l'evaluator (score des instances) arrivent en phase 5.
 
+### Le mode cluster dès la phase 3 — mais pas dès la phase 1
+
+Le MVP (phase 1) reste volontairement mono-machine pour valider
+les contrats sans bruit supplémentaire. Mais dès la phase 3 —
+premier pipeline complet "prompt → URL → contenu → N réseaux →
+résultat" — les instances de `neuron-translator` peuvent tourner
+sur des nœuds Hurd **distants** (cluster de 2 à 5 machines), via
+SSH. Le placement n'est pas arbitraire : la phase 3 est le
+premier moment où l'orchestrateur manipule N instances
+simultanément, et c'est précisément là que des hypothèses
+mono-machine pourraient s'incruster dans le scheduler et le
+supervisor. Faire le cluster à ce moment évite de construire
+des hypothèses de topologie qu'il faudrait défaire ensuite.
+
+Les contrats ne changent pas : `/llm<N>` et le trio JSON restent
+identiques, seule la localisation des instances varie — le
+failover d'un nœud à l'autre est une opération du supervisor,
+persistée comme un incident. Ce choix colle aussi à l'état
+d'Hurd : SMP dans GNU Mach étant expérimental, N nœuds modestes
+sont la bonne répartition dès aujourd'hui. L'authentification
+reste minimale en phase 3 (clés SSH système) ; le mode distant
+complet (registre nominatif révocable, serveur par session)
+reste en phase 5 côté `inference-translator`.
+
 ---
 
 ## 5. Phases
@@ -307,11 +331,24 @@ requête structurée).
 - Chaque contenu récupéré est archivé comme donnée d'entraînement
   dans `training_data` (URL, statut HTTP, contenu, empreinte
   SHA-256 anti-doublon) **avant** d'être utilisé.
+- **Mode cluster dès cette phase** : l'orchestrateur peut lancer
+  les instances de `neuron-translator` sur des nœuds Hurd
+  **distants** (cluster de 2 à 5 machines) via SSH — `/llm1`…`/llmN`
+  sont répartis sur les nœuds, et le supervisor bascule une
+  instance tombée sur un autre nœud, l'incident étant persisté.
+  Authentification minimale par clés SSH système en phase 3 ; le
+  mode distant complet (serveur par session, registre des clés
+  nominatives) reste approfondi en phase 5 côté
+  `inference-translator`.
 - **Livrable** : une tâche complète "prompt → URL → contenu →
   N réseaux → résultat agrégé", données d'entraînement persistées.
 - **Acceptation** : démonstration de bout en bout avec une URL réelle
   et une URL volontairement en erreur (404) ; les deux traces
-  (contenu et 404) sont dans `training_data`.
+  (contenu et 404) sont dans `training_data`. La même
+  démonstration tourne sur un cluster de **deux nœuds Hurd**
+  au minimum : au moins une instance de `neuron-translator` sur
+  un nœud distant, et un redémarrage après perte d'instance
+  sur l'autre nœud.
 
 ### Phase 4 — Rejouabilité : lecture et requêtes dans la base
 
