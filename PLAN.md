@@ -410,6 +410,13 @@ distant est porté par `inference-translator`.
   `netfs` si l'arborescence de commandes s'étoffe).
 - **Zéro allocation dans les chemins chauds**, mémoire contiguë,
   cohérent avec les choix de performance de `neuron-translator`.
+- **Multitâche et multi-utilisateurs** : l'orchestrateur doit piloter
+  plusieurs runs **simultanément** pour plusieurs utilisateurs —
+  exécutions concurrentes sur des topologies distinctes, état
+  cloisonné par `run_id` (descripteurs, `/llm<N>`, agrégats), aucun
+  état global non protégé ne doit sérialiser les utilisateurs entre
+  eux ; le scheduler et le supervisor deviennent le point de
+  passage obligé de cette exigence, testé avec des runs concurrents.
 - **Erreurs réseau ≠ erreurs POSIX** : un statut HTTP non-200 est une
   donnée exploitable (philosophie `httpfs`), seule la couche transport
   peut échouer.
