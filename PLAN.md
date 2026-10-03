@@ -419,6 +419,28 @@ distant est porté par `inference-translator`.
 - Chaque translator reste remplaçable : l'orchestrateur ne connaît que
   les points de montage et les contrats, jamais les binaires.
 
+### Stratégie de tests unitaires
+
+- **Harnais maison minimal** : macros `CHECK` et compteurs en
+  C23/POSIX, zéro framework externe — même convention que
+  `tests/test_neuron.c` (`neuron-translator`) et la suite
+  d'`httpfs-translator` ; `make check` est la cible standard, exigée
+  par les critères d'acceptation.
+- **Un rôle, une suite** : scheduler, supervisor, evaluator et
+  aggregator sont testés isolément, avec des instances de
+  `neuron-translator` simulées par fichiers de test — l'orchestrateur
+  ne connaissant que les contrats, un fichier qui se comporte comme
+  `/llm<N>` suffit.
+- **Stockage mémoire pour les tests** : le backend `storage_write` /
+  `storage_read` en mémoire (section 4) sert tous les tests
+  unitaires sans serveur PostgreSQL ; la persistance réelle est
+  vérifiée en intégration sur instance jetable.
+- **Réseau simulé, jamais réel** : serveur HTTP embarqué sur boucle
+  locale, à la manière d'`httpfs-translator` ; contenus et statuts
+  non-200 sont des fichiers de test.
+- **Déterminisme** : descripteurs et entrées figés ; aucune horloge
+  ni aléa non semé n'entre dans la suite.
+
 ---
 
 ## 8. Jalons synthétiques
