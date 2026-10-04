@@ -12,7 +12,14 @@
 
 set -u
 
+# The verification binary speaks the line protocol on stdio: on
+# GNU/Hurd it is built as orchestrator-translator-repl (the main
+# binary is the mounted trivfs translator); everywhere else
+# orchestrator-translator IS the verification binary.
 BINARY="${1:-../src/orchestrator-translator}"
+if [ -z "${1:-}" ] && [ -x ../src/orchestrator-translator-repl ]; then
+    BINARY=../src/orchestrator-translator-repl
+fi
 FAIL=0
 WORK=""
 

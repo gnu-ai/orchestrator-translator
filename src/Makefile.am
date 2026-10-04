@@ -40,13 +40,21 @@ bin_PROGRAMS = orchestrator-translator
 # --- La face du binaire, selon le système -------------------------------
 # Sur GNU/Hurd, main-hurd.c suit la structure canonique d'un
 # translator trivfs et trivfs-hooks.c implémente les trivfs_S_* ;
-# ailleurs, main.c construit le même moteur en mode vérification
-# sur les flux standards (même convention que la pile).
+# le binaire de vérification (main.c, le même moteur sur les flux
+# standards) est construit sous le nom orchestrator-translator-
+# repl : c'est lui que la suite de tests pilote (make check doit
+# rester vert sous Hurd comme partout).
 if ON_HURD
+bin_PROGRAMS += orchestrator-translator-repl
+
 orchestrator_translator_SOURCES = trivfs-hooks.c main-hurd.c
 orchestrator_translator_CPPFLAGS = $(AM_CPPFLAGS) -DON_HURD
 orchestrator_translator_LDADD = liborchcore.a -ltrivfs -lfshelp \
                                -lports -lshouldbeinlibc
+
+orchestrator_translator_repl_SOURCES = main.c
+orchestrator_translator_repl_CPPFLAGS = $(AM_CPPFLAGS)
+orchestrator_translator_repl_LDADD = liborchcore.a
 else
 orchestrator_translator_SOURCES = main.c
 orchestrator_translator_CPPFLAGS = $(AM_CPPFLAGS)

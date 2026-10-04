@@ -16,8 +16,20 @@
 
 set -u
 
+# The verification binary speaks the line protocol on stdio: on
+# GNU/Hurd it is built as orchestrator-translator-repl; everywhere
+# else orchestrator-translator IS the verification binary.
 BINARY="${1:-../src/orchestrator-translator}"
-DBT_BINARY="${DBT_BINARY:-../../../data-base-translator/build/src/db-translator}"
+if [ -z "${1:-}" ] && [ -x ../src/orchestrator-translator-repl ]; then
+    BINARY=../src/orchestrator-translator-repl
+fi
+# The data-base-translator verification binary it drives follows
+# the same convention (under GNU/Hurd the -repl name).
+DBT_DEFAULT=../../../data-base-translator/build/src/db-translator
+if [ -x "$DBT_DEFAULT-repl" ]; then
+    DBT_DEFAULT="$DBT_DEFAULT-repl"
+fi
+DBT_BINARY="${DBT_BINARY:-$DBT_DEFAULT}"
 FAIL=0
 WORK=""
 CLUSTER=""

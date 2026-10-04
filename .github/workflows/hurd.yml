@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Claire Ivanenka <claire@gnu-ai.org>
+#
+# GNU/Hurd CI: build and test on the REAL system, inside Debian
+# GNU/Hurd under QEMU, driven by gnu-ai/mistral-vm-debian-hurd
+# (PLAN.md: "CI sous QEMU GNU/Hurd, pilotée par le sandbox").
+#
+# The trees of this repository and of its two siblings
+# (neuron-translator, data-base-translator) are served to the
+# guest over plain HTTP on the QEMU gateway (10.0.2.2:8000): the
+# guest tests exactly the pushed commit of this repository (the
+# siblings come from their own main), and the guest's TLS stack
+# is never in the way.
+#
+# The public GitHub runners expose no /dev/kvm: the guest runs
+# under TCG, slow but faithful; the timeout below is sized for
+# that.  The image tarball is cached between runs.
+
+name: hurd
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  HURD_IMAGE: debian-hurd-amd64-20260314.img
+  HURD_URL: https://cdimage.debian.org/cdimage/ports/latest/hurd-amd64/debian-hurd-amd64-20260314.img.tar.xz
+
+jobs:
+  hurd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: orchestrator-translator
+
+      - name: Fetch the sibling repositories
+        uses: actions/checkout@v4
+        with:
+          repository: gnu-ai/data-base-translator
+          path: data-base-translator
+      - uses: actions/checkout@v4
+        with:
+          repository: gnu-ai/neuron-translator
+          path: neuron-translator
+
+      - name: Install QEMU and the VM tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-system-x86 e2fsprogs
+
+      - name: Cache the Debian GNU/Hurd image
+        uses: actions/cache@v4
+        with:
+          path: image
+          key: hurd-image-20260314
+
+      - name: Download the image
+        run: |
+          mkdir -p image
+          if [ ! -f "image/$HURD_IMAGE" ]; then
+            curl -L --retry 3 -o image/hurd.img.tar.xz "$HURD_URL"
+            tar -C image -xJf image/hurd.img.tar.xz
+            rm -f image/hurd.img.tar.xz
+          fi
+
+      - name: Fetch the VM driver
+        run: git clone --depth 1 https://github.com/gnu-ai/mistral-vm-debian-hurd
+
+      - name: Serve the trees to the guest
+        run: |
+          tar --exclude=.git -czf orchestrator-translator.tar.gz \
+              orchestrator-translator
+          tar --exclude=.git -czf data-base-translator.tar.gz \
+              data-base-translator
+          tar --exclude=.git -czf neuron-translator.tar.gz \
+              neuron-translator
+          cp orchestrator-translator/ci/guest-hurd.sh guest-hurd.sh
+          nohup python3 -m http.server 8000 >/dev/null 2>&1 &
+          sleep 1
+          curl -sI http://127.0.0.1:8000/guest-hurd.sh | head -1
+
+      - name: Build and test on real GNU/Hurd
+        run: python3 mistral-vm-debian-hurd/hurd_vm.py "image/$HURD_IMAGE" ci/guest-serial.sh
+
+      - name: Upload the serial log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hurd-serial
+          path: mistral-vm-debian-hurd/serial.log
+          if-no-files-found: ignore
